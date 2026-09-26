@@ -3,6 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@vercel/kv": "^2.0.0"
+    "redis": "^4.7.0"
+  }
+}
+{
+  "name": "plano-oab-samira",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "redis": "^4.7.0"
   }
 }
