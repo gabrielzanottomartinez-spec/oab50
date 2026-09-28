@@ -1,9 +1,41 @@
-# Autos do Plano de Estudos — 50º Exame de Ordem
+# Plano de Estudos — Exame de Ordem (sincronizado com a EBRADI)
 
 Site de página única (`index.html`) + funções serverless (`/api`) que guardam
 o progresso de **cada usuário** num banco Redis conectado ao projeto na Vercel.
 Cada pessoa cria a própria conta (nome completo, usuário e senha) e vê só o
 próprio andamento, em qualquer computador ou celular.
+
+## Cronograma personalizado
+
+Logo depois de criar a conta, o site pergunta:
+
+1. Qual Exame de Ordem a pessoa vai prestar (48º, 49º ou 50º — só aparecem os
+   exames cuja 1ª fase ainda não passou);
+2. Quantas horas por dia, no máximo, pretende estudar (1 a 8 h; conta-se
+   ~50 min por aula — constante `MIN_PER_LESSON` no `index.html`);
+3. Qual dia da semana fica para descanso (a véspera vira dia de questões e
+   simulado);
+4. Qual matéria vai escolher na 2ª fase (ou "Ainda não sei").
+
+Com isso o plano é montado no próprio navegador:
+
+- começa **no dia em que as respostas são enviadas** — ninguém entra com
+  aulas atrasadas;
+- as 961 aulas da 1ª fase são distribuídas até a véspera da prova, sem passar
+  do limite de horas; os últimos dias viram revisões intensivas (uma por
+  disciplina, enquanto couber);
+- se a pessoa escolheu uma matéria de 2ª fase, as disciplinas da 1ª fase
+  ligadas a ela ficam para o fim, e as aulas da 2ª fase entram de **1 mês antes
+  da 1ª fase até a véspera da 2ª** (com mais aulas por dia depois da 1ª fase);
+- se não couber tudo no limite de horas, o painel avisa quantas aulas por dia
+  o plano precisa.
+
+As respostas ficam salvas na conta e podem ser ajustadas pelo botão
+**Ajustar respostas do plano** no painel: o cronograma é refeito a partir do
+dia do ajuste, e as aulas já concluídas continuam marcadas.
+
+Os dados das aulas (títulos por disciplina, 1ª e 2ª fase) e as datas dos
+exames ficam no bloco `<script id="catalog-data">` do `index.html`.
 
 **O que continua só no navegador:** os arquivos anexados nos registros de
 simulado (PDF/DOCX) — ficam em IndexedDB, local a cada navegador (separados
@@ -17,7 +49,8 @@ api/register.js     → POST: cria conta { name, username, password } e já entr
 api/login.js        → POST: entra com usuário e senha
 api/logout.js       → POST: sai da conta
 api/me.js           → GET: devolve quem está logado
-api/state.js        → GET lê / POST grava o progresso do usuário logado
+api/state.js        → GET lê / POST grava o progresso e as respostas do plano
+api/backup.js       → POST: cópia de segurança automática (chamada a cada 10 min)
 api/_lib/core.js    → código compartilhado (Redis, senhas, sessões) — não vira rota
 package.json        → dependência (redis) que a Vercel instala no deploy
 vercel.json         → configuração mínima (URLs limpas + headers de segurança)
@@ -39,10 +72,23 @@ vercel.json         → configuração mínima (URLs limpas + headers de seguran
 
 ```
 oab-plano:user:<usuario>     → nome, usuário, hash da senha
-oab-plano:state:<usuario>    → progresso (aulas, revisões, simulados)
+oab-plano:state:<usuario>    → progresso (aulas, revisões, simulados) + respostas do plano
+oab-plano:backups:<usuario>  → cópias de segurança (as 144 mais recentes, da mais nova à mais antiga)
+oab-plano:backupmeta:<usuario> → horário e assinatura da última cópia
 oab-plano:session:<hash>     → sessão ativa (expira sozinha)
 oab-plano:state              → progresso ANTIGO (versão de senha única) — não é mais lido
 ```
+
+## Cópias de segurança
+
+Enquanto o site está aberto, ele pede ao servidor uma cópia de segurança a
+cada 10 minutos. O servidor só grava uma nova cópia se os dados mudaram desde
+a anterior, e guarda as 144 mais recentes. O rodapé mostra o horário da
+última cópia. (A Vercel no plano gratuito só permite tarefas agendadas
+diárias, por isso a cópia é disparada pelo próprio site aberto.)
+
+Para recuperar uma cópia, abra o banco no painel da Vercel (Storage → Redis →
+Data Browser / CLI) e leia a lista `oab-plano:backups:<usuario>`.
 
 ## Atualizando a partir da versão com senha única
 
@@ -52,8 +98,8 @@ oab-plano:state              → progresso ANTIGO (versão de senha única) — 
 3. Opcional: apague a variável `APP_PASSWORD` em **Environment Variables** —
    ela não é mais usada.
 4. Abra o site, clique em **Criar conta** e cadastre-se.
-5. Use **Importar backup** no rodapé com o seu arquivo de backup mais recente
-   para trazer o progresso antigo para a sua conta.
+5. Responda as perguntas do plano. Aulas que já estavam concluídas na conta
+   continuam marcadas e saem da distribuição.
 
 ## Deploy do zero
 
