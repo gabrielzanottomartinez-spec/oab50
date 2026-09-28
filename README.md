@@ -11,8 +11,8 @@ Logo depois de criar a conta, o site pergunta:
 
 1. Qual Exame de Ordem a pessoa vai prestar (48º, 49º ou 50º — só aparecem os
    exames cuja 1ª fase ainda não passou);
-2. Quantas horas por dia, no máximo, pretende estudar (1 a 8 h; conta-se
-   ~50 min por aula — constante `MIN_PER_LESSON` no `index.html`);
+2. Quantas horas por dia, no máximo, pretende estudar (1 a 8 h; cada aula
+   dura em média 15 min — constante `MIN_PER_LESSON` no `index.html`);
 3. Qual dia da semana fica para descanso (a véspera vira dia de questões e
    simulado);
 4. Qual matéria vai escolher na 2ª fase (ou "Ainda não sei").
@@ -24,9 +24,15 @@ Com isso o plano é montado no próprio navegador:
 - as 961 aulas da 1ª fase são distribuídas até a véspera da prova, sem passar
   do limite de horas; os últimos dias viram revisões intensivas (uma por
   disciplina, enquanto couber);
-- se a pessoa escolheu uma matéria de 2ª fase, as disciplinas da 1ª fase
-  ligadas a ela ficam para o fim, e as aulas da 2ª fase entram de **1 mês antes
-  da 1ª fase até a véspera da 2ª** (com mais aulas por dia depois da 1ª fase);
+- a 1ª fase segue a mesma regra para todos: **cada dia tem uma única
+  disciplina** (todas as aulas do dia são dela, na sequência da EBRADI), e a
+  disciplina de um dia **nunca se repete no dia de estudo seguinte**. As 20
+  disciplinas se revezam de forma uniforme, entrando primeiro a que está mais
+  atrasada em relação ao ritmo ideal. Uma segunda disciplina só aparece num
+  dia quando, sem ela, as aulas não caberiam até a prova;
+- se a pessoa escolheu uma matéria de 2ª fase, as aulas dela entram de
+  **1 mês antes da 1ª fase até a véspera da 2ª** (com mais aulas por dia
+  depois da 1ª fase);
 - se não couber tudo no limite de horas, o painel avisa quantas aulas por dia
   o plano precisa.
 
@@ -37,9 +43,9 @@ dia do ajuste, e as aulas já concluídas continuam marcadas.
 Os dados das aulas (títulos por disciplina, 1ª e 2ª fase) e as datas dos
 exames ficam no bloco `<script id="catalog-data">` do `index.html`.
 
-**O que continua só no navegador:** os arquivos anexados nos registros de
-simulado (PDF/DOCX) — ficam em IndexedDB, local a cada navegador (separados
-por usuário).
+Os arquivos anexados aos simulados (PDF, DOC ou DOCX, até 4 MB) também ficam
+no servidor, num armazenamento **privado** do Vercel Blob: só o dono da conta
+consegue abri-los.
 
 ## Estrutura
 
@@ -51,6 +57,7 @@ api/logout.js       → POST: sai da conta
 api/me.js           → GET: devolve quem está logado
 api/state.js        → GET lê / POST grava o progresso e as respostas do plano
 api/backup.js       → POST: cópia de segurança automática (chamada a cada 10 min)
+api/files.js        → POST envia / GET abre / DELETE apaga anexos de simulado
 api/_lib/core.js    → código compartilhado (Redis, senhas, sessões) — não vira rota
 package.json        → dependência (redis) que a Vercel instala no deploy
 vercel.json         → configuração mínima (URLs limpas + headers de segurança)
@@ -75,6 +82,7 @@ oab-plano:user:<usuario>     → nome, usuário, hash da senha
 oab-plano:state:<usuario>    → progresso (aulas, revisões, simulados) + respostas do plano
 oab-plano:backups:<usuario>  → cópias de segurança (as 144 mais recentes, da mais nova à mais antiga)
 oab-plano:backupmeta:<usuario> → horário e assinatura da última cópia
+oab-plano:files:<usuario>    → lista dos anexos do usuário (o arquivo em si fica no Blob)
 oab-plano:session:<hash>     → sessão ativa (expira sozinha)
 oab-plano:state              → progresso ANTIGO (versão de senha única) — não é mais lido
 ```
@@ -89,6 +97,21 @@ diárias, por isso a cópia é disparada pelo próprio site aberto.)
 
 Para recuperar uma cópia, abra o banco no painel da Vercel (Storage → Redis →
 Data Browser / CLI) e leia a lista `oab-plano:backups:<usuario>`.
+
+## Armazenamento dos anexos (Vercel Blob) — configurar uma vez
+
+1. No projeto, aba **Storage** → **Create Database** → **Blob**.
+2. Escolha acesso **Private** (se a Vercel perguntar) e conecte ao projeto.
+   Isso cria sozinha a variável `BLOB_READ_WRITE_TOKEN`.
+3. Faça um **Redeploy**.
+
+Se o seu Blob store tiver sido criado como público, adicione a variável
+`BLOB_ACCESS` com o valor `public` (os arquivos continuam acessíveis só por
+meio do site, que confere o login antes de entregá-los).
+
+Anexos feitos na versão anterior (guardados só no navegador) são enviados
+automaticamente ao servidor na próxima vez que o site for aberto naquele
+navegador.
 
 ## Atualizando a partir da versão com senha única
 

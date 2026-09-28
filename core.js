@@ -15,7 +15,8 @@ const keys = {
   session: (token) => `${PREFIX}session:${crypto.createHash('sha256').update(token).digest('hex')}`,
   loginFail: (u) => `${PREFIX}loginfail:${u}`,
   backups: (u) => `${PREFIX}backups:${u}`,
-  backupMeta: (u) => `${PREFIX}backupmeta:${u}`
+  backupMeta: (u) => `${PREFIX}backupmeta:${u}`,
+  files: (u) => `${PREFIX}files:${u}`
 };
 
 async function withRedis(fn) {

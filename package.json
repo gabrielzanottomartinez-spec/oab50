@@ -3,6 +3,7 @@
   "version": "2.0.0",
   "private": true,
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "redis": "^4.7.0"
   }
 }
