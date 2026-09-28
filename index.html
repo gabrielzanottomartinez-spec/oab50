@@ -103,6 +103,46 @@ button{font-family:inherit;}
   position:absolute; left:0; right:0; bottom:-6px; height:6px;
 }
 .capa-inner{max-width:1180px;margin:0 auto;}
+.capa-user{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin:0 0 16px;
+}
+.capa-hello{
+  margin:0;
+  font-family:var(--font-display);
+  font-size:18px;
+  font-weight:600;
+  color:var(--paper);
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.capa-handle{
+  font-family:var(--font-body);
+  font-size:12px;
+  font-weight:500;
+  opacity:.6;
+  margin-left:6px;
+}
+.capa-logout{
+  appearance:none;
+  flex-shrink:0;
+  background:transparent;
+  color:var(--paper);
+  border:1px solid currentColor;
+  opacity:.8;
+  padding:5px 12px;
+  border-radius:var(--radius-s);
+  font-size:12px;
+  font-weight:600;
+  cursor:pointer;
+}
+.capa-logout:hover{opacity:1;}
+.capa-logout[disabled]{opacity:.5;cursor:wait;}
 .capa-eyebrow{
   font-size:11.5px;
   letter-spacing:.04em;
@@ -840,6 +880,21 @@ footer{
   margin:0 auto 16px;
   animation:boot-spin 0.8s linear infinite;
 }
+.auth-card{max-width:380px;text-align:left;}
+.auth-card .boot-title{font-size:21px;}
+.auth-field{margin-bottom:12px;}
+.auth-field label{display:block;font-size:12.5px;font-weight:600;color:var(--text);margin-bottom:5px;}
+.auth-field .boot-input{margin-bottom:0;}
+.auth-hint{font-size:11.5px;color:var(--text-muted);margin-top:4px;}
+.boot-input:focus{outline:2px solid var(--ink);outline-offset:1px;}
+.auth-submit{width:100%;padding:10px 14px;font-size:13.5px;margin-top:6px;}
+.auth-submit[disabled]{opacity:.6;cursor:wait;}
+.boot-card p.auth-switch{margin:18px 0 0;font-size:12.5px;text-align:center;}
+.linkbtn{
+  appearance:none;border:none;background:none;padding:0;
+  color:var(--garnet);font:inherit;font-weight:600;
+  text-decoration:underline;text-underline-offset:2px;cursor:pointer;
+}
 @keyframes boot-spin{ to{ transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce){ .boot-spinner{animation:none;} }
 
@@ -867,6 +922,10 @@ footer{
 
 <header class="capa">
   <div class="capa-inner">
+    <div class="capa-user">
+      <p class="capa-hello"><span id="user-greeting">Olá</span><span class="capa-handle" id="user-handle"></span></p>
+      <button type="button" class="capa-logout" id="logout-btn">Sair</button>
+    </div>
     <p class="capa-eyebrow">Autos do plano de estudos · Uso exclusivo de <span id="capa-owner">—</span></p>
     <h1 class="capa-title">50º Exame de Ordem Unificado</h1>
     <p class="capa-sub">Cronograma de estudos — Direito Tributário a Filosofia do Direito, 20 disciplinas, 961 aulas.</p>
@@ -901,7 +960,7 @@ footer{
   <div class="backup-block">
     <button class="btn ghost" id="backup-export" type="button">Exportar backup do progresso</button>
     <label class="btn ghost" id="backup-import-label" style="cursor:pointer;">Importar backup<input type="file" id="backup-import" accept="application/json" style="display:none"></label>
-    <div class="sig-caption" style="margin-top:6px;max-width:340px;">O progresso fica salvo no servidor (não neste navegador) — pode abrir de qualquer dispositivo. Os anexos de simulados continuam salvos só neste navegador. Exporte um backup de vez em quando por segurança.</div>
+    <div class="sig-caption" style="margin-top:6px;max-width:340px;">O progresso fica salvo na sua conta, no servidor — pode entrar de qualquer dispositivo. Os anexos de simulados continuam salvos só neste navegador. Exporte um backup de vez em quando por segurança.</div>
     <div id="sync-status" class="sync-status"></div>
   </div>
   <div class="sig-block">
@@ -978,30 +1037,32 @@ function mondayOf(key){
   return dateToKey(dt);
 }
 
-/* ============ ESTADO (armazenado no servidor, via /api/state) ============ */
+/* ============ ESTADO (armazenado no servidor, por usuário, via /api/state) ============ */
 var STORE_ENDPOINT = '/api/state';
-var AUTH_KEY = 'oabAuthToken'; // só a credencial de acesso fica local — os dados do plano não
 var state = { lessons:{}, reviews:{}, simulados:{} }; // populado após o primeiro carregamento do servidor
+var currentUser = null; // { name, username } — vem de /api/me, /api/login ou /api/register
+var appStarted = false;
 var saveTimer = null;
+var savePending = false;
 var syncStatusEl = null;
 
-function authToken(){ try{ return localStorage.getItem(AUTH_KEY) || ''; }catch(e){ return ''; } }
-function setAuthToken(t){ try{ localStorage.setItem(AUTH_KEY, t); }catch(e){} }
-
-function apiFetch(opts){
+// A sessão vive num cookie HttpOnly definido pelo servidor — nada de senha/token no localStorage.
+function api(path, opts){
   opts = opts || {};
   var headers = {};
   for(var k in (opts.headers||{})) headers[k] = opts.headers[k];
-  var tok = authToken();
-  if(tok) headers['Authorization'] = 'Bearer '+tok;
-  var merged = {method: opts.method, headers: headers, body: opts.body};
-  return fetch(STORE_ENDPOINT, merged);
+  var body = opts.body;
+  if(opts.json !== undefined){
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(opts.json);
+  }
+  return fetch(path, {method: opts.method || 'GET', headers: headers, body: body, credentials: 'same-origin', cache: 'no-store'});
 }
+function httpError(r){ var e = new Error('http_'+r.status); e.code = r.status; return e; }
 
 function loadStateFromServer(){
-  return apiFetch({method:'GET'}).then(function(r){
-    if(r.status===401){ var e=new Error('unauthorized'); e.code=401; throw e; }
-    if(!r.ok){ var e2=new Error('server_error_'+r.status); e2.code=r.status; throw e2; }
+  return api(STORE_ENDPOINT).then(function(r){
+    if(!r.ok) throw httpError(r);
     return r.json();
   }).then(function(data){
     state = {
@@ -1015,20 +1076,26 @@ function loadStateFromServer(){
 
 function saveState(){
   clearTimeout(saveTimer);
+  savePending = true;
   setSyncStatus('pending');
-  saveTimer = setTimeout(function(){
-    apiFetch({
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(state)
-    }).then(function(r){
-      if(r.status===401){ setSyncStatus('error'); showAuthPrompt('Sessão expirada — digite a senha novamente.'); return; }
-      if(!r.ok) throw new Error('save_failed_'+r.status);
-      setSyncStatus('ok');
-    }).catch(function(){
+  saveTimer = setTimeout(pushState, 400);
+}
+// Envia o estado agora (usado pelo saveState com atraso e antes de sair da conta).
+function pushState(){
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  return api(STORE_ENDPOINT, {method:'POST', json: state}).then(function(r){
+    if(r.status===401){
       setSyncStatus('error');
-    });
-  }, 400);
+      showAuthScreen('login', 'Sua sessão expirou. Entre de novo para continuar salvando.');
+      return;
+    }
+    if(!r.ok) throw httpError(r);
+    savePending = false;
+    setSyncStatus('ok');
+  }).catch(function(){
+    setSyncStatus('error');
+  });
 }
 function setSyncStatus(kind){
   if(!syncStatusEl) syncStatusEl = document.getElementById('sync-status');
@@ -1766,7 +1833,7 @@ function bindSimuladoEvents(container, key, onChange){
       fileInput.onchange = function(){
         var f = fileInput.files[0];
         if(!f) return;
-        var blobKey = key+'-'+idx+'-'+Date.now();
+        var blobKey = (currentUser ? currentUser.username+'/' : '')+key+'-'+idx+'-'+Date.now();
         idbPut(blobKey, f).then(function(){
           entry().fileMeta = {name:f.name, type:f.type, size:f.size, blobKey:blobKey};
           saveState();
@@ -1939,7 +2006,7 @@ function exportBackup(){
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url;
-  a.download = 'backup-plano-oab-'+todayKey()+'.json';
+  a.download = 'backup-plano-oab-'+(currentUser ? currentUser.username+'-' : '')+todayKey()+'.json';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1953,11 +2020,11 @@ function importBackup(e){
     try{
       var imported = JSON.parse(reader.result);
       if(!imported || typeof imported !== 'object') throw new Error('formato inválido');
-      if(!confirm('Importar este backup vai substituir o progresso salvo no servidor. Continuar?')) return;
+      if(!confirm('Importar este backup vai substituir o progresso salvo na sua conta. Continuar?')) return;
       state = { lessons: imported.lessons||{}, reviews: imported.reviews||{}, simulados: imported.simulados||{} };
       saveState();
       renderCurrentView();
-      alert('Backup importado — salvando no servidor.');
+      alert('Backup importado — salvando na sua conta.');
     }catch(err){
       alert('Não foi possível ler este arquivo de backup.');
     }
@@ -1985,48 +2052,169 @@ function hideOverlay(){
   var overlay = document.getElementById('boot-overlay');
   if(overlay) overlay.style.display = 'none';
 }
-function showAuthPrompt(message){
+var AUTH_ERRORS = {
+  invalid_credentials: 'Usuário ou senha incorretos.',
+  username_taken: 'Esse usuário já existe. Escolha outro.',
+  invalid_name: 'Informe seu nome completo.',
+  invalid_username: 'O usuário precisa ter de 3 a 30 caracteres: letras minúsculas, números, ponto, hífen ou sublinhado.',
+  invalid_password: 'A senha precisa ter pelo menos 6 caracteres.',
+  too_many_attempts: 'Muitas tentativas erradas. Aguarde 15 minutos e tente de novo.'
+};
+
+function authField(id, label, type, autocomplete, hint){
+  return '<div class="auth-field">'+
+    '<label for="'+id+'">'+label+'</label>'+
+    '<input type="'+type+'" id="'+id+'" class="boot-input" autocomplete="'+autocomplete+'"'+
+      (type==='text' ? ' autocapitalize="'+(id==='auth-name'?'words':'none')+'" spellcheck="false"' : '')+
+      (hint ? ' aria-describedby="'+id+'-hint"' : '')+'>'+
+    (hint ? '<div class="auth-hint" id="'+id+'-hint">'+hint+'</div>' : '')+
+  '</div>';
+}
+
+function showAuthScreen(mode, message){
   var overlay = document.getElementById('boot-overlay');
   if(!overlay) return;
+  var isLogin = mode !== 'register';
   overlay.innerHTML =
-    '<div class="boot-card">'+
-      '<h2 class="boot-title">Acesso ao plano</h2>'+
-      '<p>Digite a senha configurada para este site.</p>'+
-      (message ? ('<p class="boot-error">'+escapeHtml(message)+'</p>') : '')+
-      '<input type="password" id="auth-input" class="boot-input" placeholder="Senha" autocomplete="current-password">'+
-      '<button type="button" id="auth-submit" class="btn" style="width:100%;">Entrar</button>'+
+    '<div class="boot-card auth-card">'+
+      '<h2 class="boot-title">'+(isLogin ? 'Entrar no plano de estudos' : 'Criar conta')+'</h2>'+
+      '<p>'+(isLogin
+        ? 'Entre com seu usuário e senha para abrir o seu cronograma.'
+        : 'Cada conta tem o próprio progresso, salvo no servidor.')+'</p>'+
+      '<p class="boot-error" id="auth-error" role="alert"'+(message ? '' : ' hidden')+'>'+escapeHtml(message || '')+'</p>'+
+      '<form id="auth-form" novalidate>'+
+        (isLogin ? '' : authField('auth-name', 'Nome completo', 'text', 'name'))+
+        authField('auth-user', 'Usuário', 'text', 'username',
+          isLogin ? '' : 'De 3 a 30 caracteres: letras minúsculas, números, ponto, hífen ou sublinhado.')+
+        authField('auth-pass', 'Senha', 'password', isLogin ? 'current-password' : 'new-password',
+          isLogin ? '' : 'Pelo menos 6 caracteres.')+
+        '<button type="submit" class="btn auth-submit" id="auth-submit">'+(isLogin ? 'Entrar' : 'Criar conta')+'</button>'+
+      '</form>'+
+      '<p class="auth-switch">'+(isLogin
+        ? 'Ainda não tem conta? <button type="button" class="linkbtn" id="auth-switch">Criar conta</button>'
+        : 'Já tem conta? <button type="button" class="linkbtn" id="auth-switch">Entrar</button>')+'</p>'+
     '</div>';
   overlay.style.display = 'flex';
-  var input = document.getElementById('auth-input');
-  input.focus();
-  document.getElementById('auth-submit').onclick = function(){
-    if(!input.value) return;
-    setAuthToken(input.value);
-    boot();
+
+  var form = document.getElementById('auth-form');
+  var errEl = document.getElementById('auth-error');
+  var btn = document.getElementById('auth-submit');
+  var nameEl = document.getElementById('auth-name');
+  var userEl = document.getElementById('auth-user');
+  var passEl = document.getElementById('auth-pass');
+  (nameEl || userEl).focus();
+
+  function showError(msg){ errEl.textContent = msg; errEl.hidden = false; }
+
+  document.getElementById('auth-switch').onclick = function(){
+    showAuthScreen(isLogin ? 'register' : 'login');
   };
-  input.onkeydown = function(e){ if(e.key==='Enter') document.getElementById('auth-submit').click(); };
+
+  form.onsubmit = function(ev){
+    ev.preventDefault();
+    var payload = {
+      username: userEl.value.trim().toLowerCase(),
+      password: passEl.value
+    };
+    if(!isLogin){
+      payload.name = nameEl.value.trim().replace(/\s+/g, ' ');
+      if(payload.name.length < 2){ showError(AUTH_ERRORS.invalid_name); nameEl.focus(); return; }
+      if(!/^[a-z0-9._-]{3,30}$/.test(payload.username)){ showError(AUTH_ERRORS.invalid_username); userEl.focus(); return; }
+      if(payload.password.length < 6){ showError(AUTH_ERRORS.invalid_password); passEl.focus(); return; }
+    } else if(!payload.username || !payload.password){
+      showError('Preencha usuário e senha.');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = isLogin ? 'Entrando…' : 'Criando conta…';
+    api(isLogin ? '/api/login' : '/api/register', {method:'POST', json: payload}).then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(data){
+        if(!r.ok){
+          var msg = AUTH_ERRORS[data && data.error] ||
+            'Não foi possível falar com o servidor. Verifique sua internet e tente de novo.';
+          throw new Error(msg);
+        }
+        onLoggedIn(data.user);
+      });
+    }).catch(function(err){
+      btn.disabled = false;
+      btn.textContent = isLogin ? 'Entrar' : 'Criar conta';
+      showError(err && err.message && err.message.indexOf('Failed to fetch') < 0
+        ? err.message
+        : 'Não foi possível falar com o servidor. Verifique sua internet e tente de novo.');
+    });
+  };
 }
-function boot(){
+
+function onLoggedIn(user){
+  if(appStarted){
+    // Sessão expirou no meio do uso: se voltou a mesma pessoa, só reenvia o que faltava salvar.
+    if(currentUser && user && currentUser.username === user.username){
+      hideOverlay();
+      if(savePending) pushState();
+      return;
+    }
+    // Outra conta entrou nesta aba: recarrega para não misturar dados.
+    location.reload();
+    return;
+  }
+  currentUser = user;
+  loadAndStart();
+}
+
+function loadAndStart(){
   showOverlay('Carregando seus dados…');
   loadStateFromServer().then(function(){
     hideOverlay();
     startApp();
   }).catch(function(err){
-    if(err && err.code===401){
-      showAuthPrompt(authToken() ? 'Senha incorreta — tente novamente.' : null);
-    } else {
-      showOverlay('Não foi possível conectar ao servidor. Verifique sua internet e tente novamente.', true);
-    }
+    if(err && err.code===401) showAuthScreen('login', 'Sua sessão expirou. Entre de novo.');
+    else showOverlay('Não foi possível conectar ao servidor. Verifique sua internet e tente novamente.', true);
+  });
+}
+
+function logout(){
+  var btn = document.getElementById('logout-btn');
+  btn.disabled = true;
+  var flush = savePending ? pushState() : Promise.resolve();
+  flush.then(function(){
+    return api('/api/logout', {method:'POST'});
+  }).then(function(r){
+    if(!r.ok) throw httpError(r);
+    location.reload();
+  }).catch(function(){
+    btn.disabled = false;
+    alert('Não foi possível sair agora. Verifique sua conexão e tente de novo.');
+  });
+}
+
+function firstName(full){ return String(full || '').trim().split(/\s+/)[0] || ''; }
+
+function boot(){
+  showOverlay('Carregando…');
+  api('/api/me').then(function(r){
+    if(r.status===401){ showAuthScreen('login'); return; }
+    if(!r.ok) throw httpError(r);
+    return r.json().then(function(data){ onLoggedIn(data.user); });
+  }).catch(function(){
+    showOverlay('Não foi possível conectar ao servidor. Verifique sua internet e tente novamente.', true);
   });
 }
 
 /* ============ INIT ============ */
 function startApp(){
+  if(appStarted) return;
+  appStarted = true;
+  document.getElementById('user-greeting').textContent = 'Olá, '+firstName(currentUser.name);
+  document.getElementById('user-handle').textContent = '@'+currentUser.username;
+  document.querySelector('.capa-hello').title = currentUser.name;
+  document.getElementById('logout-btn').onclick = logout;
   tabs.forEach(function(t){
     document.getElementById('tabbtn-'+t).onclick = function(){ switchTab(t); };
   });
-  document.getElementById('capa-owner').textContent = META.owner;
-  document.getElementById('sig-name').textContent = META.owner;
+  document.getElementById('capa-owner').textContent = currentUser.name;
+  document.getElementById('sig-name').textContent = currentUser.name;
   document.getElementById('backup-export').onclick = exportBackup;
   document.getElementById('backup-import').onchange = importBackup;
   renderCurrentView();
