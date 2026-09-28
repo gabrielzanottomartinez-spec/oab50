@@ -1133,7 +1133,8 @@ function isValidProfile(p){
 // O tamanho de cada dia é recalculado a cada passo (aulas que faltam ÷ espaço que falta),
 // então um dia mais curto — quando a disciplina acaba — é compensado nos dias seguintes.
 // Uma segunda disciplina só entra num dia se, sem ela, as aulas não coubessem até a prova.
-function interleaveFase1(queues, rooms){
+function interleaveFase1(queues, rooms, forbid){
+  forbid = forbid || [];
   var total = 0;
   queues.forEach(function(q){ total += q.n; });
   var roomTotal = 0;
@@ -1141,6 +1142,17 @@ function interleaveFase1(queues, rooms){
   var over = roomTotal > 0 ? Math.max(1, total/roomTotal) : 1; // >1 quando o limite de horas não comporta tudo
   var roomAfter = rooms.map(function(){ return 0; });
   for(var k = rooms.length-2; k >= 0; k--) roomAfter[k] = roomAfter[k+1] + rooms[k+1];
+  // Ritmo de cada disciplina: o ideal é ter cumprido, ao fim de cada dia, a mesma fração
+  // do "espaço" que ela pode usar. Uma disciplina proibida em alguns dias (ex.: a matéria
+  // equivalente à da 2ª fase, no mês antes da prova) tem um prazo mais curto: precisa
+  // terminar até o último dia em que é permitida.
+  var cumRoom = [], acc = 0;
+  rooms.forEach(function(r){ acc += r; cumRoom.push(acc); });
+  queues.forEach(function(q){
+    var last = rooms.length-1;
+    while(last > 0 && (forbid[last] || {})[q.id]) last--;
+    q.until = Math.max(1, cumRoom[last] || 1);
+  });
   var scheduled = 0, prevSet = {};
 
   return rooms.map(function(room, i){
@@ -1153,10 +1165,12 @@ function interleaveFase1(queues, rooms){
     if(target <= 0) return [];
 
     var dayItems = [], used = {};
-    function deficit(q){ return q.n*(scheduled+target)/total - q.done; }
+    function deficit(q){ return q.n*Math.min(1, cumRoom[i]/q.until) - q.done; }
     function pick(){
       var open = queues.filter(function(q){ return q.done < q.n && !used[q.id]; });
       if(!open.length) return null;
+      var allowed = open.filter(function(q){ return !(forbid[i] || {})[q.id]; });
+      if(allowed.length) open = allowed;
       var fresh = open.filter(function(q){ return !prevSet[q.id]; });
       var cands = fresh.length ? fresh : open;
       cands.sort(function(a,b){ return (deficit(b) - deficit(a)) || (a.idx - b.idx); });
@@ -1174,6 +1188,36 @@ function interleaveFase1(queues, rooms){
       return take;
     }
 
+    // Reta final: se os dias que faltam mal dão para fechar cada disciplina em dias próprios,
+    // cada dia passa a concluir uma disciplina inteira (até o limite do dia), começando pelas
+    // que têm mais aulas — assim nenhuma sobra para dividir o dia com outra.
+    var daysLeft = 0;
+    for(var z = i; z < rooms.length; z++) if(rooms[z] > 0) daysLeft++;
+    // capacidade do dia na reta final: o limite do dia, mas nunca menos que o necessário
+    // para caber o que falta nos dias restantes (quando o limite de horas não comporta tudo)
+    var capHere = Math.max(1, Math.floor(roomHere), Math.ceil(left/Math.max(1, daysLeft)));
+    var need = 0;
+    queues.forEach(function(qq){ if(qq.done < qq.n) need += Math.ceil((qq.n - qq.done)/capHere); });
+    if(need >= daysLeft - 1){
+      var openF = queues.filter(function(qq){ return qq.done < qq.n; });
+      var allowedF = openF.filter(function(qq){ return !(forbid[i] || {})[qq.id]; });
+      if(allowedF.length) openF = allowedF;
+      var freshF = openF.filter(function(qq){ return !prevSet[qq.id]; });
+      var candF = (freshF.length ? freshF : openF).sort(function(a,b){
+        return (a.until - b.until) || ((b.n-b.done) - (a.n-a.done)) || (a.idx - b.idx);
+      });
+      if(candF.length){
+        var qf = candF[0];
+        var gotF = takeFrom(qf, Math.min(qf.n - qf.done, capHere));
+        if(i === rooms.length-1){ // último dia: o que sobrar precisa entrar
+          while(scheduled + gotF < total){ var qx = pick(); if(!qx) break; gotF += takeFrom(qx, total - scheduled - gotF); }
+        }
+        scheduled += gotF;
+        if(dayItems.length) prevSet = used;
+        return dayItems;
+      }
+    }
+
     var q = pick();
     if(!q) return [];
     var got = takeFrom(q, target);
@@ -1189,6 +1233,36 @@ function interleaveFase1(queues, rooms){
     if(dayItems.length) prevSet = used;
     return dayItems;
   });
+}
+
+// Garante uma disciplina por dia: se um dia ficou com restos de outras disciplinas, cada
+// resto vai para o dia mais próximo da PRÓPRIA disciplina (o anterior, no fim da lista dela;
+// ou o seguinte, no começo) — a sequência das aulas continua a mesma.
+function consolidateDays(byDay){
+  byDay.forEach(function(items, i){
+    var groups = {};
+    items.forEach(function(it){ (groups[it.disc] = groups[it.disc] || []).push(it); });
+    var discs = Object.keys(groups);
+    if(discs.length < 2) return;
+    discs.sort(function(a,b){ return groups[b].length - groups[a].length; });
+    var keep = discs[0], kept = groups[keep];
+    discs.slice(1).forEach(function(d){
+      var moved = false;
+      for(var j = i-1; j >= 0 && !moved; j--){
+        if(byDay[j].length && byDay[j].every(function(it){ return it.disc === d; })){
+          byDay[j] = byDay[j].concat(groups[d]); moved = true;
+        } else if(byDay[j].some(function(it){ return it.disc === d; })) break;
+      }
+      for(var k = i+1; k < byDay.length && !moved; k++){
+        if(byDay[k].length && byDay[k].every(function(it){ return it.disc === d; })){
+          byDay[k] = groups[d].concat(byDay[k]); moved = true;
+        } else if(byDay[k].some(function(it){ return it.disc === d; })) break;
+      }
+      if(!moved) kept = kept.concat(groups[d]);
+    });
+    byDay[i] = kept;
+  });
+  return byDay;
 }
 
 function computePlan(p){
@@ -1230,19 +1304,36 @@ function computePlan(p){
     slots.push({date:k, sim: dow===SIM, post: k>P1, f2:0, p1:0, review:null});
   }
 
-  // 2ª fase: de 1 mês antes da 1ª fase até a véspera da 2ª (com mais peso depois da 1ª fase)
+  // 2ª fase: de 1 mês antes da 1ª fase até a véspera da 2ª. A matéria da 2ª fase tem dias
+  // próprios (nunca divide o dia com a 1ª fase) e nunca cai em dois dias de estudo seguidos:
+  // - antes da prova da 1ª fase: um dia de 1ª fase, um dia de 2ª fase, alternando;
+  // - depois da prova da 1ª fase: um dia de aula, um dia de treino de peças, alternando.
   var f2Start = null;
   if(f2){
     f2Start = addMonths(P1, -1);
     if(f2Start < S) f2Start = S;
-    var f2Slots = slots.filter(function(sl){ return sl.date >= f2Start && !sl.sim; });
-    var f2Counts = spread(p2Items.length, f2Slots.map(function(sl){ return sl.post ? 2 : 1; }));
-    f2Slots.forEach(function(sl, i){ sl.f2 = f2Counts[i]; });
+    var preWin = slots.filter(function(sl){ return !sl.post && !sl.sim && sl.date >= f2Start; });
+    preWin.forEach(function(sl, i){ if(i % 2 === 1) sl.f2day = true; });
+    var postWin = slots.filter(function(sl){ return sl.post; });
+    // se o último dia de estudo antes da prova foi de 2ª fase, depois da prova começa com treino
+    var lastPreStudy = slots.filter(function(sl){ return !sl.post && !sl.sim; }).pop();
+    var offset = (lastPreStudy && lastPreStudy.f2day) ? 1 : 0;
+    postWin.forEach(function(sl, i){ if((i + offset) % 2 === 0) sl.f2day = true; else sl.practice = true; });
+    var f2Days = slots.filter(function(sl){ return sl.f2day; });
+    var f2Counts = spread(p2Items.length, f2Days.map(function(){ return 1; }));
+    f2Days.forEach(function(sl, i){ sl.f2 = f2Counts[i]; });
+    // antes da prova, um dia reservado à 2ª fase que ficaria sem aula volta a ser dia de 1ª fase
+    f2Days.forEach(function(sl){ if(!sl.post && sl.f2 === 0) sl.f2day = false; });
+    f2Days = slots.filter(function(sl){ return sl.f2day; });
+    // vizinhos (no calendário de estudo) de um dia de 2ª fase
+    slots.forEach(function(sl, i){
+      if((slots[i-1] && slots[i-1].f2day) || (slots[i+1] && slots[i+1].f2day)) sl.nearF2 = true;
+    });
   }
 
   // 1ª fase: os últimos dias de estudo antes da prova viram revisões intensivas (uma por disciplina);
   // se as aulas não couberem no limite de horas, o número de revisões diminui.
-  var studyPre = slots.filter(function(sl){ return !sl.post && !sl.sim; });
+  var studyPre = slots.filter(function(sl){ return !sl.post && !sl.sim && !sl.f2day; });
   function roomFor(list){ var c = 0; list.forEach(function(sl){ c += Math.max(0, cap - sl.f2); }); return c; }
   var K = Math.min(F1.length, studyPre.length);
   while(K > 0 && roomFor(studyPre.slice(0, studyPre.length-K)) < p1Items.length) K--;
@@ -1255,10 +1346,29 @@ function computePlan(p){
     reviewSlots = studyPre.slice(studyPre.length-k);
     var w = contentSlots.map(function(sl){ return Math.max(0, cap - sl.f2); });
     if(w.every(function(x){ return x===0; })) w = w.map(function(){ return 1; });
-    p1ByDay = interleaveFase1(queues, w);
-    return contentSlots.every(function(sl, i){ return p1ByDay[i].length + sl.f2 <= cap; });
+    var f2Twin = f2 ? f2.id.replace(/^f2-/, '') : null; // ex.: 2ª fase de Penal ⇔ Direito Penal da 1ª fase
+    var forbid = contentSlots.map(function(sl){ var o = {}; if(f2Twin && sl.nearF2) o[f2Twin] = 1; return o; });
+    p1ByDay = consolidateDays(interleaveFase1(queues, w, forbid));
+    var fits = contentSlots.every(function(sl, i){ return p1ByDay[i].length + sl.f2 <= cap; });
+    var single = p1ByDay.every(function(items){
+      return items.every(function(it){ return it.disc === items[0].disc; });
+    });
+    return {fits: fits, single: single};
   }
-  while(!distribute(K) && K > 0) K--;
+  // Procura o maior número de revisões em que todo dia tenha uma só disciplina e caiba no
+  // limite de horas; se não houver, fica com o maior que ao menos caiba no limite.
+  // Prioridades: (1) uma disciplina por dia E dentro do limite de horas; (2) uma disciplina
+  // por dia, mesmo passando do limite (plano apertado — o painel avisa); (3) dentro do limite.
+  var chosen = -1, singleK = -1, fallbackK = -1;
+  for(var k = Math.min(F1.length, studyPre.length); k >= 0; k--){
+    if(k > K && chosen < 0 && singleK < 0) { var r0 = distribute(k); if(r0.fits && r0.single){ chosen = k; break; } continue; }
+    var r = distribute(k);
+    if(r.fits && fallbackK < 0) fallbackK = k;
+    if(r.single && singleK < 0) singleK = k;
+    if(r.fits && r.single){ chosen = k; break; }
+  }
+  K = chosen >= 0 ? chosen : (singleK >= 0 ? singleK : (fallbackK >= 0 ? fallbackK : 0));
+  distribute(K);
   contentSlots.forEach(function(sl, i){ sl.p1 = p1ByDay[i].length; sl.p1Items = p1ByDay[i]; });
 
   var revDiscs = order.slice()
@@ -1273,6 +1383,28 @@ function computePlan(p){
       if(!lastSet[revDiscs[r].id]){ var tmp = revDiscs[0]; revDiscs[0] = revDiscs[r]; revDiscs[r] = tmp; break; }
     }
   }
+  // a revisão da matéria equivalente à da 2ª fase não pode ficar ao lado de um dia de 2ª fase
+  if(f2){
+    var twinId = f2.id.replace(/^f2-/, '');
+    var ti = -1;
+    revDiscs.forEach(function(d, i){ if(d.id === twinId) ti = i; });
+    if(ti >= 0 && reviewSlots[ti] && reviewSlots[ti].nearF2){
+      var swapped = false;
+      for(var r2 = 0; r2 < reviewSlots.length; r2++){
+        if(!reviewSlots[r2].nearF2 && !(r2 === 0 && lastSet[twinId])){
+          var tmp2 = revDiscs[ti]; revDiscs[ti] = revDiscs[r2]; revDiscs[r2] = tmp2; swapped = true; break;
+        }
+      }
+      // sem lugar longe dos dias de 2ª fase: essa revisão passa a ser de outra disciplina
+      if(!swapped){
+        var inRev = {};
+        revDiscs.forEach(function(d){ inRev[d.id] = 1; });
+        var sub = order.slice().sort(function(a,b){ return b.lessons.length - a.lessons.length; })
+          .filter(function(d){ return !inRev[d.id] && d.id !== twinId && !(ti === 0 && lastSet[d.id]); })[0];
+        if(sub) revDiscs[ti] = sub;
+      }
+    }
+  }
   reviewSlots.forEach(function(sl, i){ sl.review = revDiscs[i]; });
 
   var days = [], p1Ptr = 0, p2Ptr = 0, maxLoad = 0, loadSum = 0, loadDays = 0;
@@ -1283,7 +1415,7 @@ function computePlan(p){
     if(sl.review){
       day = {date:sl.date, type:'review', disc:sl.review.id, discName:sl.review.name, discTotal:sl.review.lessons.length, items:items};
     } else if(sl.sim || items.length===0){
-      day = {date:sl.date, type:'simulado', practice: sl.post ? 2 : 1, items:items};
+      day = {date:sl.date, type:'simulado', practice: (sl.post || sl.f2day || sl.practice) ? 2 : 1, items:items};
     } else {
       day = {date:sl.date, type:'content', items:items};
     }
@@ -1581,69 +1713,109 @@ function isDayFullyDone(day){
 /* ============ PENDÊNCIAS (aulas de dias já passados e não concluídas) ============ */
 var _overdueCache = null;
 var _overdueCacheDay = null;
+function matterOf(discId){ return String(discId).replace(/^f2-/, ''); }
+function dayMatters(d){
+  var ids = {};
+  d.items.forEach(function(it){ ids[matterOf(it.disc)] = 1; });
+  if(d.type==='review') ids[matterOf(d.disc)] = 1;
+  return ids;
+}
+function dayDiscIds(d){
+  var ids = {};
+  d.items.forEach(function(it){ ids[it.disc] = 1; });
+  if(d.type==='review') ids[d.disc] = 1;
+  return ids;
+}
+// Aulas pendentes (de dias já passados) são repostas no próximo dia de estudo da PRÓPRIA
+// disciplina — assim nenhum dia ganha uma segunda matéria e nenhuma matéria cai em dias
+// seguidos. Se forem muitas, dividem-se pelos próximos dias dessa disciplina.
+// Só quando a disciplina não tem mais nenhum dia pela frente, a reposição vai para o
+// primeiro dia cujos dias vizinhos não sejam dessa disciplina.
 function computeOverdueMakeups(){
   if(_overdueCache && _overdueCacheDay===todayK) return _overdueCache;
 
-  var overdueByDisc = {}; // discId -> [{item, originalDate}], em ordem cronológica
+  var overdueByDisc = {}, order = [];
   DAYS.forEach(function(d){
     if(d.date < todayK){
       d.items.forEach(function(it){
         if(!isLessonDone(it.id)){
-          overdueByDisc[it.disc] = overdueByDisc[it.disc] || [];
+          if(!overdueByDisc[it.disc]){ overdueByDisc[it.disc] = []; order.push(it.disc); }
           overdueByDisc[it.disc].push({item:it, originalDate:d.date});
         }
       });
     }
   });
 
-  var nextWeekEnd = addDays(todayK, 7);
-  var futureDaysByDisc = {}; // discId -> [dateKey...] ordenado, hoje em diante
-  var nextWeekContentDates = []; // qualquer dia de conteúdo nos próximos 7 dias, ordenado
-  DATE_LIST.forEach(function(dk){
-    if(dk < todayK) return;
-    var d = DAY_BY_DATE[dk];
-    if(d && d.items.length){
-      var seen = {};
-      d.items.forEach(function(it){
-        if(seen[it.disc]) return;
-        seen[it.disc] = 1;
-        futureDaysByDisc[it.disc] = futureDaysByDisc[it.disc] || [];
-        futureDaysByDisc[it.disc].push(dk);
-      });
-      if(d.type==='content' && dk <= nextWeekEnd) nextWeekContentDates.push(dk);
-    }
+  var future = DATE_LIST.filter(function(dk){ return dk >= todayK; }).map(function(dk){ return DAY_BY_DATE[dk]; });
+  var futureByDisc = {};
+  future.forEach(function(d){
+    var ids = dayDiscIds(d);
+    for(var id in ids){ (futureByDisc[id] = futureByDisc[id] || []).push(d.date); }
   });
+  var cap = PLAN ? PLAN.stats.cap : 4;
 
-  var byDate = {}; // dateKey -> [{item, originalDate}]
-  var flatList = [];
-  var fallbackPtr = 0; // round-robin entre os dias de conteúdo da próxima semana, para disciplinas sem dia natural nesse período
-  Object.keys(overdueByDisc).forEach(function(disc){
+  var byDate = {}, flatList = [];
+  function place(entry, dk){
+    if(dk){ (byDate[dk] = byDate[dk] || []).push(entry); }
+    flatList.push({item:entry.item, originalDate:entry.originalDate, targetDate:dk || null});
+  }
+  order.forEach(function(disc){
     var entries = overdueByDisc[disc];
-    var allFuture = futureDaysByDisc[disc] || [];
-    // 1) prioridade: um dia já natural dessa disciplina dentro da próxima semana
-    var nearWeekSameDisc = allFuture.filter(function(dk){ return dk <= nextWeekEnd; });
-    entries.forEach(function(entry, i){
-      var targetDate;
-      if(nearWeekSameDisc.length>0){
-        targetDate = nearWeekSameDisc[i % nearWeekSameDisc.length];
-      } else if(nextWeekContentDates.length>0){
-        // 2) sem dia natural da disciplina na próxima semana: aloca mesmo assim ao longo da
-        //    próxima semana, no melhor dia disponível (marcado como reposição extra)
-        targetDate = nextWeekContentDates[fallbackPtr % nextWeekContentDates.length];
-        fallbackPtr++;
-      } else if(allFuture.length>0){
-        // 3) sem nenhum dia de conteúdo na próxima semana (ex.: já em revisão final): usa a
-        //    próxima ocorrência real da disciplina, mesmo que mais distante
-        targetDate = allFuture[i % allFuture.length];
-      } else {
-        targetDate = null;
+    var targets = futureByDisc[disc] || [];
+    if(targets.length){
+      var t = 0;
+      entries.forEach(function(entry){
+        // avança para o próximo dia da disciplina se este já estiver cheio
+        while(t < targets.length-1){
+          var d = DAY_BY_DATE[targets[t]];
+          var load = d.items.length + (byDate[targets[t]] || []).length;
+          if(load < Math.max(cap, d.items.length+1)) break;
+          t++;
+        }
+        place(entry, targets[t]);
+      });
+    } else {
+      var isF1 = disc.indexOf('f2-') !== 0;
+      if(isF1 && todayK >= META.primeiraFase){ entries.forEach(function(entry){ place(entry, null); }); return; }
+      function neighborsFree(i){
+        var prev = i>0 ? future[i-1] : DAY_BY_DATE[DATE_LIST[DATE_LIST.indexOf(future[0].date)-1]];
+        var next = future[i+1];
+        var pm = prev ? dayMatters(prev) : {}, nm = next ? dayMatters(next) : {};
+        (byDate[prev && prev.date] || []).forEach(function(e){ pm[matterOf(e.item.disc)] = 1; });
+        (byDate[next && next.date] || []).forEach(function(e){ nm[matterOf(e.item.disc)] = 1; });
+        return !pm[matterOf(disc)] && !nm[matterOf(disc)];
       }
-      if(targetDate){
-        byDate[targetDate] = byDate[targetDate] || [];
-        byDate[targetDate].push(entry);
+      var limit = isF1 ? META.primeiraFase : META.endDate;
+      var pick = null;
+      // 1º) um dia de questões ainda sem matéria (a reposição vira a matéria única do dia)
+      for(var i=0;i<future.length && !pick;i++){
+        var d = future[i];
+        if(d.date >= limit) break;
+        if(d.type==='simulado' && !d.items.length && !(byDate[d.date]||[]).length && neighborsFree(i)) pick = d.date;
       }
-      flatList.push({item:entry.item, originalDate:entry.originalDate, targetDate:targetDate});
-    });
+      // 2º) senão, um dia de conteúdo da 1ª fase que ainda não recebeu nenhuma reposição
+      //     (fica com no máximo 2 matérias), com vizinhos sem essa disciplina
+      for(var j=0;j<future.length && !pick;j++){
+        var dj = future[j];
+        if(dj.date >= limit) break;
+        var ownF2 = dj.items.some(function(it){ return it.phase===2; });
+        if(dj.type!=='review' && !ownF2 && !(byDate[dj.date]||[]).length && neighborsFree(j)) pick = dj.date;
+      }
+      // 3º) último recurso: o dia (com vizinhos livres) que tiver menos reposições de outras
+      //     disciplinas — espalha as pendências, uma matéria extra por dia sempre que possível
+      if(!pick){
+        var bestLoad = Infinity;
+        for(var q=0;q<future.length;q++){
+          if(future[q].date >= limit) break;
+          if(!neighborsFree(q)) continue;
+          var others = {};
+          (byDate[future[q].date]||[]).forEach(function(e){ others[e.item.disc] = 1; });
+          var n = Object.keys(others).length;
+          if(n < bestLoad){ bestLoad = n; pick = future[q].date; if(n === 0) break; }
+        }
+      }
+      entries.forEach(function(entry){ place(entry, pick); });
+    }
   });
   flatList.sort(function(a,b){ return a.originalDate < b.originalDate ? -1 : (a.originalDate > b.originalDate ? 1 : 0); });
 
@@ -1970,7 +2142,7 @@ function renderPendentes(){
 
   var head = '<h2 class="view-title">Aulas pendentes</h2>'+
     '<p class="view-sub">Aulas de dias já passados que ainda não foram marcadas como concluídas'+
-    (list.length>0 ? ', realocadas — quando possível — para o próximo dia da mesma disciplina na semana seguinte.' : '.')+'</p>';
+    (list.length>0 ? ', repostas no próximo dia de estudo da mesma disciplina.' : '.')+'</p>';
 
   if(list.length===0){
     el.innerHTML = head + '<div class="rest-note"><span class="big">Tudo em dia</span>Nenhuma aula pendente no momento — continue assim!</div>';
@@ -1987,7 +2159,7 @@ function renderPendentes(){
         '<div class="li-title">'+escapeHtml(it.title)+'</div>'+
         '<div class="pend-dates">'+
           '<span class="pend-orig">pendente desde '+fmtDateShort(entry.originalDate)+'</span>'+
-          (entry.targetDate ? ('<span class="pend-target">→ reposição em '+fmtDateShort(entry.targetDate)+'</span>') : '<span class="pend-target">sem data de reposição definida</span>')+
+          (entry.targetDate ? ('<span class="pend-target">→ reposição em '+fmtDateShort(entry.targetDate)+'</span>') : '<span class="pend-target">'+(todayK >= META.primeiraFase && it.phase===1 ? 'a prova da 1ª fase já passou' : 'sem data de reposição definida')+'</span>')+
         '</div>'+
       '</div>'+
       '<button type="button" class="btn-mini pend-open" data-date="'+navDate+'">abrir dia</button>'+
@@ -2082,7 +2254,7 @@ function renderDiario(){
   if(makeupItems.length>0){
     body += '<div class="makeup-block">'+
       '<h3 class="makeup-title">Reposições alocadas para este dia</h3>'+
-      '<p class="makeup-sub">Aulas de dias já passados e ainda não concluídas.</p>'+
+      '<p class="makeup-sub">Aulas de dias já passados que ainda não foram concluídas, repostas no próximo dia da mesma disciplina.</p>'+
       '<div class="lesson-list">'+
       makeupItems.map(function(entry){ return lessonItemHtml(entry.item, 'pendente desde '+fmtDateShort(entry.originalDate)); }).join('')+
       '</div>'+
