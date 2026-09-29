@@ -36,7 +36,8 @@ Com isso o plano é montado no próprio navegador:
 - se não couber tudo no limite de horas, o painel avisa quantas aulas por dia
   o plano precisa.
 
-As respostas ficam salvas na conta e podem ser ajustadas pelo botão
+O questionário aparece **uma única vez**, logo após o cadastro. As respostas
+ficam gravadas no cadastro do usuário no servidor (rota `/api/profile`) e podem ser ajustadas pelo botão
 **Ajustar respostas do plano** no painel: o cronograma é refeito a partir do
 dia do ajuste, e as aulas já concluídas continuam marcadas.
 
@@ -55,7 +56,8 @@ api/register.js     → POST: cria conta { name, username, password } e já entr
 api/login.js        → POST: entra com usuário e senha
 api/logout.js       → POST: sai da conta
 api/me.js           → GET: devolve quem está logado
-api/state.js        → GET lê / POST grava o progresso e as respostas do plano
+api/profile.js      → GET lê / POST grava as respostas do questionário (no cadastro do usuário)
+api/state.js        → GET lê / POST grava o progresso (aulas, revisões, simulados)
 api/backup.js       → POST: cópia de segurança automática (chamada a cada 10 min)
 api/files.js        → POST envia / GET abre / DELETE apaga anexos de simulado
 api/_lib/core.js    → código compartilhado (Redis, senhas, sessões) — não vira rota
@@ -78,7 +80,7 @@ vercel.json         → configuração mínima (URLs limpas + headers de seguran
 ## Dados no Redis
 
 ```
-oab-plano:user:<usuario>     → nome, usuário, hash da senha
+oab-plano:user:<usuario>     → nome, usuário, hash da senha e respostas do questionário
 oab-plano:state:<usuario>    → progresso (aulas, revisões, simulados) + respostas do plano
 oab-plano:backups:<usuario>  → cópias de segurança (as 144 mais recentes, da mais nova à mais antiga)
 oab-plano:backupmeta:<usuario> → horário e assinatura da última cópia
@@ -115,8 +117,9 @@ navegador.
 
 ## Atualizando a partir da versão com senha única
 
-1. Substitua os arquivos do repositório por estes (a pasta `api` agora tem
-   vários arquivos e a subpasta `_lib`).
+1. Substitua **todos** os arquivos do repositório por estes — inclusive a
+   pasta `api` inteira, com a subpasta `_lib`. Publicar só o `index.html`
+   com uma pasta `api` antiga faz o site perder dados.
 2. Faça o deploy (o banco Redis continua o mesmo; nada precisa ser recriado).
 3. Opcional: apague a variável `APP_PASSWORD` em **Environment Variables** —
    ela não é mais usada.

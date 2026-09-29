@@ -2672,6 +2672,17 @@ function onbChips(name, opts, selected, extraCls){
       '<span>'+o.l+(o.s ? '<small>'+o.s+'</small>' : '')+'</span></label>';
   }).join('')+'</div>';
 }
+// Grava as respostas do questionário no cadastro do usuário, no servidor.
+function saveProfile(prof){
+  return api('/api/profile', {method:'POST', json:{profile: prof}}).then(function(r){
+    return r.json().catch(function(){ return {}; }).then(function(d){
+      if(!r.ok){ var e = new Error(d.error || ('http_'+r.status)); e.code = r.status; throw e; }
+      currentUser.profile = d.profile || prof;
+      return currentUser.profile;
+    });
+  });
+}
+
 function showOnboarding(isEdit){
   var overlay = document.getElementById('boot-overlay');
   if(!overlay) return;
@@ -2760,16 +2771,12 @@ function showOnboarding(isEdit){
       errEl.hidden = false;
       return;
     }
-    var previous = state.profile;
-    state.profile = prof;
     btn.disabled = true;
     btn.textContent = 'Montando…';
-    clearTimeout(saveTimer);
-    api(STORE_ENDPOINT, {method:'POST', json: state}).then(function(r){
-      if(!r.ok) throw httpError(r);
-      savePending = false;
-      setSyncStatus('ok');
-      applyPlan(computePlan(prof));
+    saveProfile(prof).then(function(saved){
+      state.profile = saved;
+      saveState(); // mantém uma cópia junto do progresso (compatibilidade)
+      applyPlan(computePlan(saved));
       if(appStarted){
         resetUi();
         renderCapa();
@@ -2780,12 +2787,13 @@ function showOnboarding(isEdit){
         startApp();
       }
     }).catch(function(err){
-      state.profile = previous;
       btn.disabled = false;
       btn.textContent = isEdit ? 'Refazer cronograma' : 'Montar meu cronograma';
       errEl.textContent = (err && err.code===401)
         ? 'Sua sessão expirou. Recarregue a página e entre de novo.'
-        : 'Não foi possível salvar suas respostas. Verifique sua internet e tente de novo.';
+        : (err && err.code===404)
+          ? 'O servidor não tem a rota de respostas (/api/profile). Confira se a pasta "api" foi publicada inteira na Vercel.'
+          : 'Não foi possível salvar suas respostas. Verifique sua internet e tente de novo.';
       errEl.hidden = false;
     });
   };
@@ -2926,8 +2934,16 @@ function onLoggedIn(user){
 function loadAndStart(){
   showOverlay('Carregando seus dados…');
   loadStateFromServer().then(function(){
-    if(isValidProfile(state.profile)){
-      applyPlan(computePlan(state.profile));
+    var prof = isValidProfile(currentUser.profile) ? currentUser.profile : null;
+    // conta que respondeu na versão anterior (respostas guardadas junto do progresso):
+    // passa as respostas para o cadastro, sem perguntar de novo
+    if(!prof && isValidProfile(state.profile)){
+      prof = state.profile;
+      saveProfile(prof).catch(function(){});
+    }
+    if(prof){
+      state.profile = prof;
+      applyPlan(computePlan(prof));
       hideOverlay();
       startApp();
     } else {

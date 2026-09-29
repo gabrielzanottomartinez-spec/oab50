@@ -113,7 +113,8 @@ async function getSessionUser(client, req) {
 }
 
 function publicUser(u) {
-  return { name: u.name, username: u.username };
+  // profile = respostas do questionário inicial (null enquanto não respondido)
+  return { name: u.name, username: u.username, profile: u.profile || null };
 }
 
 module.exports = {
